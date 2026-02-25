@@ -35,6 +35,17 @@ declare class DeepFilterNet3Core {
     constructor(config?: DeepFilterNet3ProcessorConfig);
     initialize(): Promise<void>;
     createAudioWorkletNode(audioContext: AudioContext): Promise<AudioWorkletNode>;
+    /**
+     * Wait for the worklet to post a READY message, meaning WASM init is done.
+     * Call this after createAudioWorkletNode() to ensure the worklet is fully ready.
+     */
+    waitForReady(): Promise<void>;
+    /**
+     * Full warmup: download WASM + model, register worklet, create node, wait for READY.
+     * After this resolves, the processor is fully initialized and bypass=true.
+     * Connecting a track afterwards is instant (no CPU spike, no audio glitch).
+     */
+    warmup(audioContext: AudioContext): Promise<AudioWorkletNode>;
     setSuppressionLevel(level: number): void;
     destroy(): void;
     isReady(): boolean;
@@ -56,8 +67,16 @@ declare class DeepFilterNoiseFilterProcessor implements TrackProcessor<Track.Kin
     private externalAudioContext;
     private ownsAudioContext;
     private sampleRate;
+    private _isWarmedUp;
     constructor(options?: DeepFilterNoiseFilterOptions);
     static isSupported(): boolean;
+    /**
+     * Preload / warmup: downloads WASM + model, registers worklet, creates node,
+     * waits for READY message from worklet. After this, the processor is fully
+     * initialized with bypass=true. Connecting a track is then instant.
+     * Safe to call multiple times — only runs once.
+     */
+    preload(): Promise<void>;
     init: (opts: {
         track?: MediaStreamTrack;
         mediaStreamTrack?: MediaStreamTrack;
@@ -73,6 +92,15 @@ declare class DeepFilterNoiseFilterProcessor implements TrackProcessor<Track.Kin
     suspend: () => Promise<void>;
     resume: () => Promise<void>;
     destroy: () => Promise<void>;
+    /**
+     * Connect (or reconnect) a source track to the already-initialized graph.
+     * This is the fast path — no WASM, no worklet registration, just a source node swap.
+     */
+    private connectSourceTrack;
+    private ensureAudioContext;
+    /**
+     * Full cold-start graph setup (fallback when preload() wasn't called).
+     */
     private ensureGraph;
     private teardownGraph;
 }
