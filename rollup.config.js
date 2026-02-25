@@ -9,28 +9,30 @@ import { dirname, resolve } from 'path';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Custom plugin to import worklet files as strings
-function workletAsString() {
+// Custom plugin to import worklet/worker files as strings
+function codeAsString() {
   return {
-    name: 'worklet-as-string',
+    name: 'code-as-string',
     resolveId(id) {
-      if (id.includes('?worklet-code')) {
+      if (id.includes('?worklet-code') || id.includes('?worker-code')) {
         return id;
       }
       return null;
     },
     load(id) {
+      let distFile = null;
       if (id.includes('?worklet-code')) {
-        const distFile = 'dist/DeepFilterWorklet.js';
-        const distPath = resolve(__dirname, distFile);
+        distFile = 'dist/DeepFilterWorklet.js';
+      } else if (id.includes('?worker-code')) {
+        distFile = 'dist/DeepFilterWorker.js';
+      }
 
+      if (distFile) {
+        const distPath = resolve(__dirname, distFile);
         try {
           const code = readFileSync(distPath, 'utf-8');
-          // Return the code as a string export
           return `export default ${JSON.stringify(code)};`;
         } catch (e) {
-          // During initial build, the dist file doesn't exist yet
-          // Return a placeholder that will be updated in a second build pass
           console.warn(`Warning: ${distFile} not found. You may need to run build twice.`);
           return `export default '';`;
         }
@@ -41,7 +43,7 @@ function workletAsString() {
 }
 
 export default [
-  // Worklet bundle - Build this first
+  // Worklet bundle - Build first (no WASM imports, lightweight)
   {
     input: 'src/worklet/DeepFilterWorklet.ts',
     output: {
@@ -61,7 +63,27 @@ export default [
     ],
   },
 
-  // Main library bundle - Build this second (after worklet file exists)
+  // Worker bundle - Build second (has WASM imports)
+  {
+    input: 'src/worker/DeepFilterWorker.ts',
+    output: {
+      file: 'dist/DeepFilterWorker.js',
+      format: 'iife',
+      sourcemap: false,
+    },
+    plugins: [
+      nodeResolve(),
+      commonjs(),
+      typescript({
+        tsconfig: './tsconfig.build.json',
+        declaration: false,
+        sourceMap: false,
+        target: 'ES2020',
+      }),
+    ],
+  },
+
+  // Main library bundle - Build third (after worklet + worker files exist)
   {
     input: 'src/index.ts',
     output: [
@@ -78,7 +100,7 @@ export default [
     ],
     external: ['livekit-client'],
     plugins: [
-      workletAsString(), // Load worklet file as string
+      codeAsString(),
       nodeResolve(),
       commonjs(),
       typescript({
@@ -90,7 +112,7 @@ export default [
     ],
   },
 
-  // Type definitions - Build this last
+  // Type definitions - Build last
   {
     input: 'src/index.ts',
     output: [{ file: 'dist/index.d.ts', format: 'es' }],

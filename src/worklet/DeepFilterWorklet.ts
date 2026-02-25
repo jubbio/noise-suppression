@@ -1,163 +1,98 @@
-import * as wasm_bindgen from '../df3/df';
+/**
+ * DeepFilterWorklet — lightweight I/O bridge for audio processing.
+ *
+ * This worklet does NO WASM processing. It only:
+ * 1. Collects input samples into frames (ring buffer)
+ * 2. Sends complete frames to DeepFilterWorker via MessagePort
+ * 3. Receives processed frames back and writes to output ring buffer
+ * 4. Outputs processed samples from the output ring buffer
+ *
+ * All heavy WASM work (df_create, df_process_frame) runs in the Worker
+ * on a separate thread, keeping the audio render thread unblocked.
+ * This prevents WASAPI buffer underruns that disrupt other apps' audio.
+ */
+
 import { WorkletMessageTypes } from '../constants';
-import type { ProcessorOptions, DeepFilterModel } from '../interfaces';
 
 class DeepFilterAudioProcessor extends AudioWorkletProcessor {
-  private dfModel: DeepFilterModel | null = null;
   private inputBuffer: Float32Array;
   private outputBuffer: Float32Array;
   private inputWritePos = 0;
   private inputReadPos = 0;
   private outputWritePos = 0;
   private outputReadPos = 0;
-  private bypass = true; // Start bypassed — passthrough until WASM is ready
-  private isInitialized = false;
+  private bypass = true;
+  private isReady = false;
   private bufferSize: number;
+  private frameLength = 480; // Default, updated when Worker sends READY
   private tempFrame: Float32Array | null = null;
 
-  // Stored options for lazy init
-  private pendingOptions: ProcessorOptions | null = null;
+  // MessagePort to communicate with DeepFilterWorker
+  private workerPort: MessagePort | null = null;
 
-  // Adaptive suppression state
-  private adaptiveEnabled = false;
-  private baseSuppression = 50;
-  private minSuppression = 10;
-  private currentSuppression = 50;
-  private rmsSmoothed = 0;
-  private noiseFloor = 0.001;
-  private noiseFloorAlpha = 0.001;
-  private quietThreshold = 0.005;
-  private loudThreshold = 0.03;
+  // Track pending frames to avoid flooding the Worker
+  private pendingFrames = 0;
+  private readonly maxPendingFrames = 4;
 
-  constructor(options: AudioWorkletNodeOptions & { processorOptions: ProcessorOptions }) {
+  constructor() {
     super();
 
     this.bufferSize = 8192;
     this.inputBuffer = new Float32Array(this.bufferSize);
     this.outputBuffer = new Float32Array(this.bufferSize);
 
-    // Store options for lazy init — do NOT init WASM here.
-    // Constructor runs synchronously on the audio render thread and blocks
-    // the main thread (new AudioWorkletNode() waits for it). Heavy WASM
-    // init here causes WASAPI buffer underruns on Windows, disrupting
-    // audio in other applications. Instead, WASM init is triggered via
-    // an INIT message after the node is created.
-    this.pendingOptions = options.processorOptions;
-    this.baseSuppression = options.processorOptions.suppressionLevel ?? 50;
-    this.currentSuppression = this.baseSuppression;
-
-    // Listen for messages immediately (SET_BYPASS, INIT, etc.)
     this.port.onmessage = (event: MessageEvent) => {
       this.handleMessage(event.data);
     };
   }
 
-  /**
-   * Lazy WASM initialization — triggered by INIT message from main thread.
-   * Runs on the audio thread but does NOT block the main thread or
-   * AudioWorkletNode constructor. process() continues in bypass/passthrough
-   * mode while this runs, so no buffer underruns occur.
-   */
-  private initWasm(): void {
-    if (this.isInitialized || !this.pendingOptions) return;
-
-    try {
-      wasm_bindgen.initSync(this.pendingOptions.wasmModule);
-
-      const modelBytes = new Uint8Array(this.pendingOptions.modelBytes);
-      const handle = wasm_bindgen.df_create(
-        modelBytes,
-        this.pendingOptions.suppressionLevel ?? 50
-      );
-
-      const frameLength = wasm_bindgen.df_get_frame_length(handle);
-
-      this.dfModel = { handle, frameLength };
-
-      this.bufferSize = frameLength * 4;
-      this.inputBuffer = new Float32Array(this.bufferSize);
-      this.outputBuffer = new Float32Array(this.bufferSize);
-
-      // Pre-allocate temp frame buffer
-      this.tempFrame = new Float32Array(frameLength);
-
-      // Pre-fill output ring buffer with silence (one frameLength worth)
-      this.outputWritePos = frameLength;
-
-      this.isInitialized = true;
-      this.pendingOptions = null;
-
-      // Notify main thread that WASM init is complete
-      this.port.postMessage({ type: 'READY' });
-    } catch (error) {
-      console.error('Failed to initialize DeepFilter in AudioWorklet:', error);
-      this.isInitialized = false;
-      this.pendingOptions = null;
-      this.port.postMessage({ type: 'ERROR', error: String(error) });
-    }
-  }
-
-  private handleMessage(data: { type: string; value?: number | boolean }): void {
+  private handleMessage(data: any): void {
     switch (data.type) {
-      case WorkletMessageTypes.INIT:
-        // Trigger lazy WASM initialization
-        this.initWasm();
-        break;
-      case WorkletMessageTypes.SET_SUPPRESSION_LEVEL:
-        if (this.dfModel && typeof data.value === 'number') {
-          const level = Math.max(0, Math.min(100, Math.floor(data.value)));
-          this.baseSuppression = level;
-          if (!this.adaptiveEnabled) {
-            this.currentSuppression = level;
-            wasm_bindgen.df_set_atten_lim(this.dfModel.handle, level);
+      case WorkletMessageTypes.SET_WORKER_PORT: {
+        // Receive MessagePort for direct Worker communication
+        this.workerPort = data.port;
+        this.workerPort!.onmessage = (e: MessageEvent) => {
+          if (e.data.type === 'PROCESSED') {
+            this.onProcessedFrame(e.data.samples);
           }
-        }
+        };
         break;
+      }
+
+      case WorkletMessageTypes.SET_FRAME_LENGTH: {
+        // Worker finished init, tells us the frame length
+        this.frameLength = data.value;
+        this.bufferSize = this.frameLength * 8;
+        this.inputBuffer = new Float32Array(this.bufferSize);
+        this.outputBuffer = new Float32Array(this.bufferSize);
+        this.tempFrame = new Float32Array(this.frameLength);
+        // Pre-fill output with silence (one frame worth of latency)
+        this.outputWritePos = this.frameLength;
+        this.inputWritePos = 0;
+        this.inputReadPos = 0;
+        this.outputReadPos = 0;
+        this.pendingFrames = 0;
+        this.isReady = true;
+        this.port.postMessage({ type: 'READY' });
+        break;
+      }
+
       case WorkletMessageTypes.SET_BYPASS:
         this.bypass = Boolean(data.value);
         break;
-      case WorkletMessageTypes.SET_ADAPTIVE:
-        this.adaptiveEnabled = Boolean(data.value);
-        if (!this.adaptiveEnabled && this.dfModel) {
-          this.currentSuppression = this.baseSuppression;
-          wasm_bindgen.df_set_atten_lim(this.dfModel.handle, this.baseSuppression);
-        }
-        break;
     }
   }
 
-  private computeRMS(buf: Float32Array, len: number): number {
-    let sum = 0;
-    for (let i = 0; i < len; i++) {
-      sum += buf[i] * buf[i];
-    }
-    return Math.sqrt(sum / len);
-  }
+  /**
+   * Called when Worker sends back a processed frame.
+   * Write it into the output ring buffer.
+   */
+  private onProcessedFrame(samples: Float32Array): void {
+    this.pendingFrames = Math.max(0, this.pendingFrames - 1);
 
-  private adaptSuppression(rms: number): void {
-    if (!this.dfModel) return;
-
-    if (rms < this.noiseFloor * 3) {
-      this.noiseFloor = this.noiseFloor * (1 - this.noiseFloorAlpha) + rms * this.noiseFloorAlpha;
-    }
-
-    const alpha = 0.05;
-    this.rmsSmoothed = this.rmsSmoothed * (1 - alpha) + rms * alpha;
-
-    let targetSuppression: number;
-    if (this.rmsSmoothed <= this.quietThreshold) {
-      targetSuppression = this.minSuppression;
-    } else if (this.rmsSmoothed >= this.loudThreshold) {
-      targetSuppression = this.baseSuppression;
-    } else {
-      const t = (this.rmsSmoothed - this.quietThreshold) / (this.loudThreshold - this.quietThreshold);
-      targetSuppression = this.minSuppression + t * (this.baseSuppression - this.minSuppression);
-    }
-
-    const rounded = Math.floor(targetSuppression);
-    if (Math.abs(rounded - this.currentSuppression) >= 2) {
-      this.currentSuppression = rounded;
-      wasm_bindgen.df_set_atten_lim(this.dfModel.handle, rounded);
+    for (let i = 0; i < samples.length; i++) {
+      this.outputBuffer[this.outputWritePos] = samples[i];
+      this.outputWritePos = (this.outputWritePos + 1) % this.bufferSize;
     }
   }
 
@@ -171,19 +106,15 @@ class DeepFilterAudioProcessor extends AudioWorkletProcessor {
 
   process(inputList: Float32Array[][], outputList: Float32Array[][]): boolean {
     const sourceLimit = Math.min(inputList.length, outputList.length);
-
     const input = inputList[0]?.[0];
-    if (!input) {
-      return true;
-    }
+    if (!input) return true;
 
-    // Passthrough mode - copy input to all output channels
-    if (!this.isInitialized || !this.dfModel || this.bypass || !this.tempFrame) {
+    // Passthrough mode
+    if (!this.isReady || this.bypass || !this.workerPort || !this.tempFrame) {
       for (let inputNum = 0; inputNum < sourceLimit; inputNum++) {
         const output = outputList[inputNum];
-        const channelCount = output.length;
-        for (let channelNum = 0; channelNum < channelCount; channelNum++) {
-          output[channelNum].set(input);
+        for (let ch = 0; ch < output.length; ch++) {
+          output[ch].set(input);
         }
       }
       return true;
@@ -195,37 +126,33 @@ class DeepFilterAudioProcessor extends AudioWorkletProcessor {
       this.inputWritePos = (this.inputWritePos + 1) % this.bufferSize;
     }
 
-    const frameLength = this.dfModel.frameLength;
-
-    while (this.getInputAvailable() >= frameLength) {
-      for (let i = 0; i < frameLength; i++) {
-        this.tempFrame[i] = this.inputBuffer[this.inputReadPos];
+    // Send complete frames to Worker for processing
+    while (
+      this.getInputAvailable() >= this.frameLength &&
+      this.pendingFrames < this.maxPendingFrames
+    ) {
+      for (let i = 0; i < this.frameLength; i++) {
+        this.tempFrame![i] = this.inputBuffer[this.inputReadPos];
         this.inputReadPos = (this.inputReadPos + 1) % this.bufferSize;
       }
 
-      if (this.adaptiveEnabled) {
-        const rms = this.computeRMS(this.tempFrame, frameLength);
-        this.adaptSuppression(rms);
-      }
-
-      const processed = wasm_bindgen.df_process_frame(this.dfModel.handle, this.tempFrame);
-
-      for (let i = 0; i < processed.length; i++) {
-        this.outputBuffer[this.outputWritePos] = processed[i];
-        this.outputWritePos = (this.outputWritePos + 1) % this.bufferSize;
-      }
+      // Copy frame data (tempFrame is reused, need a copy for transfer)
+      const frameCopy = new Float32Array(this.tempFrame!);
+      this.workerPort.postMessage(
+        { type: 'FRAME', samples: frameCopy },
+        [frameCopy.buffer] // Transfer — zero-copy send
+      );
+      this.pendingFrames++;
     }
 
+    // Read processed output
     const outputAvailable = this.getOutputAvailable();
     if (outputAvailable >= 128) {
       for (let inputNum = 0; inputNum < sourceLimit; inputNum++) {
         const output = outputList[inputNum];
-        const channelCount = output.length;
-
-        for (let channelNum = 0; channelNum < channelCount; channelNum++) {
-          const outputChannel = output[channelNum];
+        for (let ch = 0; ch < output.length; ch++) {
+          const outputChannel = output[ch];
           let readPos = this.outputReadPos;
-
           for (let i = 0; i < 128; i++) {
             outputChannel[i] = this.outputBuffer[readPos];
             readPos = (readPos + 1) % this.bufferSize;
@@ -234,6 +161,7 @@ class DeepFilterAudioProcessor extends AudioWorkletProcessor {
       }
       this.outputReadPos = (this.outputReadPos + 128) % this.bufferSize;
     }
+
     return true;
   }
 }

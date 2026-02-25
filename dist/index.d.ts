@@ -29,29 +29,39 @@ declare class DeepFilterNet3Core {
     private assetLoader;
     private assets;
     private workletNode;
+    private worker;
     private isInitialized;
     private bypassEnabled;
     private config;
     constructor(config?: DeepFilterNet3ProcessorConfig);
     initialize(): Promise<void>;
+    /**
+     * Start the processing Worker and initialize WASM inside it.
+     * This runs df_create() on a separate thread — NOT the audio render thread.
+     * Returns a promise that resolves with the frameLength when WASM is ready.
+     */
+    private startWorker;
     createAudioWorkletNode(audioContext: AudioContext): Promise<AudioWorkletNode>;
     /**
-     * Wait for the worklet to post a READY message, meaning WASM init is done.
-     * Call this after createAudioWorkletNode() to ensure the worklet is fully ready.
-     */
-    waitForReady(): Promise<void>;
-    /**
-     * Full warmup: download WASM + model, register worklet, create node, wait for READY.
-     * After this resolves, the processor is fully initialized and bypass=true.
-     * Connecting a track afterwards is instant (no CPU spike, no audio glitch).
+     * Full warmup: download assets, start Worker (WASM init), register worklet,
+     * create node, bridge Worker↔Worklet via MessageChannel.
+     *
+     * After this resolves, the system is fully ready:
+     * - Worker has WASM initialized (df_create done)
+     * - Worklet is registered and connected to Worker
+     * - Audio render thread was NEVER blocked by WASM
      */
     warmup(audioContext: AudioContext): Promise<AudioWorkletNode>;
+    /**
+     * Wait for the worklet to post a READY message.
+     */
+    waitForReady(): Promise<void>;
     setSuppressionLevel(level: number): void;
-    destroy(): void;
-    isReady(): boolean;
     setNoiseSuppressionEnabled(enabled: boolean): void;
     setAdaptiveEnabled(enabled: boolean): void;
     isNoiseSuppressionEnabled(): boolean;
+    isReady(): boolean;
+    destroy(): void;
     private ensureInitialized;
 }
 

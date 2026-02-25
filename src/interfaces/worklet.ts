@@ -1,3 +1,4 @@
+/** Legacy — kept for backward compatibility but no longer used by worklet */
 export interface ProcessorOptions {
   wasmModule: WebAssembly.Module;
   modelBytes: ArrayBuffer;
