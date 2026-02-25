@@ -31,10 +31,16 @@ function getAssetLoader(config) {
  * Creates a worklet module URL from inline code string
  * This approach works with all bundlers without special configuration
  */
+// Track which AudioContexts already have the worklet registered
+const registeredContexts = new WeakSet();
 async function createWorkletModule(audioContext, workletCode) {
+    if (registeredContexts.has(audioContext)) {
+        return; // Already registered on this AudioContext
+    }
     const blob = new Blob([workletCode], { type: 'application/javascript' });
     const blobUrl = URL.createObjectURL(blob);
     await audioContext.audioWorklet.addModule(blobUrl);
+    registeredContexts.add(audioContext);
 }
 
 const WorkletMessageTypes = {
@@ -368,6 +374,7 @@ class DeepFilterNoiseFilterProcessor {
     }
     /**
      * Full cold-start graph setup (fallback when preload() wasn't called).
+     * Uses warmup() which starts Worker + Worklet + MessageChannel bridge.
      */
     async ensureGraph() {
         if (!this.originalTrack) {
@@ -380,12 +387,10 @@ class DeepFilterNoiseFilterProcessor {
             }
             catch { }
         }
-        await this.processor.initialize();
         if (!this.workletNode) {
-            const node = await this.processor.createAudioWorkletNode(this.audioContext);
-            this.workletNode = node;
-            // Wait for worklet READY even in cold-start path
-            await this.processor.waitForReady();
+            // warmup() handles: WASM download, Worker start, worklet registration,
+            // MessageChannel bridge, and waits for READY
+            this.workletNode = await this.processor.warmup(this.audioContext);
         }
         if (!this.destination) {
             this.destination = this.audioContext.createMediaStreamDestination();

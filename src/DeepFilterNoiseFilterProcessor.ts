@@ -174,6 +174,7 @@ export class DeepFilterNoiseFilterProcessor implements TrackProcessor<Track.Kind
 
   /**
    * Full cold-start graph setup (fallback when preload() wasn't called).
+   * Uses warmup() which starts Worker + Worklet + MessageChannel bridge.
    */
   private async ensureGraph(): Promise<void> {
     if (!this.originalTrack) {
@@ -186,13 +187,10 @@ export class DeepFilterNoiseFilterProcessor implements TrackProcessor<Track.Kind
       try { await this.audioContext!.resume(); } catch {}
     }
 
-    await this.processor.initialize();
-
     if (!this.workletNode) {
-      const node = await this.processor.createAudioWorkletNode(this.audioContext!);
-      this.workletNode = node;
-      // Wait for worklet READY even in cold-start path
-      await this.processor.waitForReady();
+      // warmup() handles: WASM download, Worker start, worklet registration,
+      // MessageChannel bridge, and waits for READY
+      this.workletNode = await this.processor.warmup(this.audioContext!);
     }
 
     if (!this.destination) {

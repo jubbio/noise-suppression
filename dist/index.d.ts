@@ -115,6 +115,7 @@ declare class DeepFilterNoiseFilterProcessor implements TrackProcessor<Track.Kin
     private ensureAudioContext;
     /**
      * Full cold-start graph setup (fallback when preload() wasn't called).
+     * Uses warmup() which starts Worker + Worklet + MessageChannel bridge.
      */
     private ensureGraph;
     private teardownGraph;
