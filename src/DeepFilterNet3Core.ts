@@ -138,6 +138,15 @@ export class DeepFilterNet3Core {
     });
   }
 
+  setAdaptiveEnabled(enabled: boolean): void {
+    if (!this.workletNode) return;
+
+    this.workletNode.port.postMessage({
+      type: WorkletMessageTypes.SET_ADAPTIVE,
+      value: enabled
+    });
+  }
+
   isNoiseSuppressionEnabled(): boolean {
     return !this.bypassEnabled;
   }

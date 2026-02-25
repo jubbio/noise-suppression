@@ -50,6 +50,7 @@ declare class DeepFilterNet3Core {
     destroy(): void;
     isReady(): boolean;
     setNoiseSuppressionEnabled(enabled: boolean): void;
+    setAdaptiveEnabled(enabled: boolean): void;
     isNoiseSuppressionEnabled(): boolean;
     private ensureInitialized;
 }
@@ -89,6 +90,7 @@ declare class DeepFilterNoiseFilterProcessor implements TrackProcessor<Track.Kin
     setSuppressionLevel(level: number): void;
     isEnabled(): boolean;
     isNoiseSuppressionEnabled(): boolean;
+    setAdaptiveEnabled(enabled: boolean): void;
     suspend: () => Promise<void>;
     resume: () => Promise<void>;
     destroy: () => Promise<void>;

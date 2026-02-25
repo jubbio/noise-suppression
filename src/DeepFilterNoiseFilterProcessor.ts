@@ -116,6 +116,10 @@ export class DeepFilterNoiseFilterProcessor implements TrackProcessor<Track.Kind
     return this.processor.isNoiseSuppressionEnabled();
   }
 
+  setAdaptiveEnabled(enabled: boolean): void {
+    this.processor.setAdaptiveEnabled(enabled);
+  }
+
   suspend = async (): Promise<void> => {
     if (this.audioContext && this.audioContext.state === 'running') {
       await this.audioContext.suspend();

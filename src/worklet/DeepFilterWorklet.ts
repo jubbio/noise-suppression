@@ -15,6 +15,19 @@ class DeepFilterAudioProcessor extends AudioWorkletProcessor {
   private bufferSize: number;
   private tempFrame: Float32Array | null = null;
 
+  // Adaptive suppression state
+  private adaptiveEnabled = false;
+  private baseSuppression = 50;   // User-set level (used as max)
+  private minSuppression = 10;    // Minimum suppression when quiet
+  private currentSuppression = 50;
+  private rmsSmoothed = 0;        // Exponentially smoothed RMS
+  // Noise floor tracking
+  private noiseFloor = 0.001;     // Estimated ambient noise level
+  private noiseFloorAlpha = 0.001; // Very slow adaptation for noise floor
+  // Thresholds (RMS values, not dB)
+  private quietThreshold = 0.005;  // Below this = quiet environment
+  private loudThreshold = 0.03;    // Above this = full suppression needed
+
   constructor(options: AudioWorkletNodeOptions & { processorOptions: ProcessorOptions }) {
     super();
 
@@ -40,6 +53,8 @@ class DeepFilterAudioProcessor extends AudioWorkletProcessor {
       const frameLength = wasm_bindgen.df_get_frame_length(handle);
 
       this.dfModel = { handle, frameLength };
+      this.baseSuppression = options.processorOptions.suppressionLevel ?? 50;
+      this.currentSuppression = this.baseSuppression;
 
       this.bufferSize = frameLength * 4;
       this.inputBuffer = new Float32Array(this.bufferSize);
@@ -68,12 +83,80 @@ class DeepFilterAudioProcessor extends AudioWorkletProcessor {
       case WorkletMessageTypes.SET_SUPPRESSION_LEVEL:
         if (this.dfModel && typeof data.value === 'number') {
           const level = Math.max(0, Math.min(100, Math.floor(data.value)));
-          wasm_bindgen.df_set_atten_lim(this.dfModel.handle, level);
+          this.baseSuppression = level;
+          if (!this.adaptiveEnabled) {
+            this.currentSuppression = level;
+            wasm_bindgen.df_set_atten_lim(this.dfModel.handle, level);
+          }
         }
         break;
       case WorkletMessageTypes.SET_BYPASS:
         this.bypass = Boolean(data.value);
         break;
+      case WorkletMessageTypes.SET_ADAPTIVE:
+        this.adaptiveEnabled = Boolean(data.value);
+        if (!this.adaptiveEnabled && this.dfModel) {
+          // Revert to base level when adaptive is turned off
+          this.currentSuppression = this.baseSuppression;
+          wasm_bindgen.df_set_atten_lim(this.dfModel.handle, this.baseSuppression);
+        }
+        break;
+    }
+  }
+
+  /**
+   * Compute RMS of a buffer segment.
+   * Runs in audio thread — kept minimal.
+   */
+  private computeRMS(buf: Float32Array, len: number): number {
+    let sum = 0;
+    for (let i = 0; i < len; i++) {
+      sum += buf[i] * buf[i];
+    }
+    return Math.sqrt(sum / len);
+  }
+
+  /**
+   * Adapt suppression level based on current noise environment.
+   * Called once per frame (every ~10ms at 48kHz/480 frame).
+   *
+   * Logic:
+   * - Track noise floor with very slow EMA (adapts over seconds)
+   * - If RMS is near noise floor → environment is quiet → lower suppression
+   * - If RMS is well above noise floor → noisy → raise suppression toward base
+   * - Smooth transitions to avoid audible jumps
+   */
+  private adaptSuppression(rms: number): void {
+    if (!this.dfModel) return;
+
+    // Update noise floor estimate (only when signal is relatively quiet)
+    if (rms < this.noiseFloor * 3) {
+      this.noiseFloor = this.noiseFloor * (1 - this.noiseFloorAlpha) + rms * this.noiseFloorAlpha;
+    }
+
+    // Smooth the RMS to avoid reacting to transients
+    const alpha = 0.05;
+    this.rmsSmoothed = this.rmsSmoothed * (1 - alpha) + rms * alpha;
+
+    // Map smoothed RMS to suppression level
+    let targetSuppression: number;
+    if (this.rmsSmoothed <= this.quietThreshold) {
+      // Quiet environment — minimal suppression saves CPU
+      targetSuppression = this.minSuppression;
+    } else if (this.rmsSmoothed >= this.loudThreshold) {
+      // Noisy environment — full user-set suppression
+      targetSuppression = this.baseSuppression;
+    } else {
+      // Linear interpolation between quiet and loud thresholds
+      const t = (this.rmsSmoothed - this.quietThreshold) / (this.loudThreshold - this.quietThreshold);
+      targetSuppression = this.minSuppression + t * (this.baseSuppression - this.minSuppression);
+    }
+
+    // Only update WASM if level changed by at least 2 (avoid excessive calls)
+    const rounded = Math.floor(targetSuppression);
+    if (Math.abs(rounded - this.currentSuppression) >= 2) {
+      this.currentSuppression = rounded;
+      wasm_bindgen.df_set_atten_lim(this.dfModel.handle, rounded);
     }
   }
 
@@ -118,6 +201,12 @@ class DeepFilterAudioProcessor extends AudioWorkletProcessor {
       for (let i = 0; i < frameLength; i++) {
         this.tempFrame[i] = this.inputBuffer[this.inputReadPos];
         this.inputReadPos = (this.inputReadPos + 1) % this.bufferSize;
+      }
+
+      // Adaptive suppression: adjust level based on noise environment
+      if (this.adaptiveEnabled) {
+        const rms = this.computeRMS(this.tempFrame, frameLength);
+        this.adaptSuppression(rms);
       }
 
       const processed = wasm_bindgen.df_process_frame(this.dfModel.handle, this.tempFrame);
