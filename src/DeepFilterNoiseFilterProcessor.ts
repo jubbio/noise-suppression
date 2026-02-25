@@ -15,6 +15,10 @@ export class DeepFilterNoiseFilterProcessor implements TrackProcessor<Track.Kind
   enabled = true;
   originalTrack?: MediaStreamTrack;
 
+  private externalAudioContext: AudioContext | null = null;
+  private ownsAudioContext = false;
+  private sampleRate: number;
+
   constructor(options: DeepFilterNoiseFilterOptions = {}) {
     const cfg = {
       sampleRate: options.sampleRate ?? 48000,
@@ -22,8 +26,13 @@ export class DeepFilterNoiseFilterProcessor implements TrackProcessor<Track.Kind
       assetConfig: options.assetConfig
     };
 
+    this.sampleRate = cfg.sampleRate;
     this.enabled = options.enabled ?? true;
     this.processor = new DeepFilterNet3Core(cfg);
+
+    if (options.audioContext) {
+      this.externalAudioContext = options.audioContext;
+    }
   }
 
   static isSupported(): boolean {
@@ -87,7 +96,16 @@ export class DeepFilterNoiseFilterProcessor implements TrackProcessor<Track.Kind
       throw new Error('No source track');
     }
 
-    this.audioContext ??= new AudioContext({ sampleRate: 48000 });
+    // Use external AudioContext if provided, otherwise create one
+    if (!this.audioContext) {
+      if (this.externalAudioContext) {
+        this.audioContext = this.externalAudioContext;
+        this.ownsAudioContext = false;
+      } else {
+        this.audioContext = new AudioContext({ sampleRate: this.sampleRate });
+        this.ownsAudioContext = true;
+      }
+    }
 
     if (this.audioContext.state !== 'running') {
       try {
@@ -134,10 +152,11 @@ export class DeepFilterNoiseFilterProcessor implements TrackProcessor<Track.Kind
         this.destination.disconnect();
         this.destination = null;
       }
-      if (this.audioContext) {
+      // Only close AudioContext if we created it
+      if (this.audioContext && this.ownsAudioContext) {
         void this.audioContext.close();
-        this.audioContext = null;
       }
+      this.audioContext = null;
     } catch {
       // Ignore disconnect errors
     }

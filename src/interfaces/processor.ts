@@ -18,4 +18,6 @@ export interface DeepFilterNoiseFilterOptions {
   noiseReductionLevel?: number;
   assetConfig?: AssetConfig;
   enabled?: boolean;
+  /** Supply an existing AudioContext to avoid creating a new one (prevents audio disruption on Windows) */
+  audioContext?: AudioContext;
 }

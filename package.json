@@ -23,59 +23,36 @@
   ],
   "scripts": {
     "build": "rollup -c && node --input-type=module -e \"import { unlinkSync } from 'fs'; unlinkSync('dist/DeepFilterWorklet.js');\"",
-    "dev": "tsc --watch",
-    "prepublishOnly": "yarn build",
-    "type-check": "tsc --noEmit",
-    "lint": "eslint src --ext .ts,.tsx",
-    "lint:fix": "eslint src --ext .ts,.tsx --fix",
-    "lint:check": "eslint src --ext .ts,.tsx --max-warnings 0"
+    "type-check": "tsc --noEmit"
   },
   "keywords": [
     "livekit",
     "audio",
-    "streaming",
     "noise-filter",
     "deepfilternet3",
-    "webrtc",
-    "audio-processing"
+    "webrtc"
   ],
-  "author": "phuvinh010701",
   "license": "(Apache-2.0 OR MIT)",
   "peerDependencies": {
     "livekit-client": "^2.0.0"
   },
   "devDependencies": {
-    "@rollup/plugin-commonjs": "^25.0.0",
-    "@rollup/plugin-node-resolve": "^15.0.0",
-    "@rollup/plugin-typescript": "^11.0.0",
+    "@rollup/plugin-commonjs": "^28.0.0",
+    "@rollup/plugin-node-resolve": "^16.0.0",
+    "@rollup/plugin-typescript": "^12.0.0",
     "@rollup/plugin-url": "^8.0.2",
-    "@semantic-release/changelog": "^6.0.3",
-    "@semantic-release/git": "^10.0.1",
-    "@semantic-release/github": "^12.0.0",
-    "@semantic-release/npm": "^13.1.1",
     "@types/audioworklet": "^0.0.87",
-    "@types/node": "^20.0.0",
-    "@typescript-eslint/eslint-plugin": "^8.46.0",
-    "@typescript-eslint/parser": "^8.46.0",
-    "conventional-changelog-conventionalcommits": "^9.1.0",
-    "eslint": "^9.37.0",
     "livekit-client": "^2.0.0",
     "rollup": "^4.0.0",
     "rollup-plugin-dts": "^6.0.0",
     "rollup-plugin-string": "^3.0.0",
-    "semantic-release": "^25.0.1",
     "typescript": "^5.0.0"
   },
   "engines": {
     "node": ">=18.0.0"
   },
-  "packageManager": "yarn@1.22.22",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/mezonai/mezon-noise-suppression.git"
-  },
-  "bugs": {
-    "url": "https://github.com/mezonai/mezon-noise-suppression/issues"
-  },
-  "homepage": "https://github.com/mezonai/mezon-noise-suppression#readme"
+    "url": "git+https://github.com/jubbio/noise-suppression.git"
+  }
 }
