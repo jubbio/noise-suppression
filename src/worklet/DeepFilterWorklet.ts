@@ -34,6 +34,10 @@ class DeepFilterAudioProcessor extends AudioWorkletProcessor {
   private pendingFrames = 0;
   private readonly maxPendingFrames = 4;
 
+  // Underrun protection: keep last good output frame for crossfade
+  private lastGoodFrame: Float32Array | null = null;
+  private underrunCount = 0;
+
   constructor() {
     super();
 
@@ -62,16 +66,18 @@ class DeepFilterAudioProcessor extends AudioWorkletProcessor {
       case WorkletMessageTypes.SET_FRAME_LENGTH: {
         // Worker finished init, tells us the frame length
         this.frameLength = data.value;
-        this.bufferSize = this.frameLength * 8;
+        this.bufferSize = this.frameLength * 12;
         this.inputBuffer = new Float32Array(this.bufferSize);
         this.outputBuffer = new Float32Array(this.bufferSize);
         this.tempFrame = new Float32Array(this.frameLength);
-        // Pre-fill output with silence (one frame worth of latency)
-        this.outputWritePos = this.frameLength;
+        this.lastGoodFrame = new Float32Array(128);
+        // Pre-fill output with silence (2 frames worth of latency for underrun protection)
+        this.outputWritePos = this.frameLength * 2;
         this.inputWritePos = 0;
         this.inputReadPos = 0;
         this.outputReadPos = 0;
         this.pendingFrames = 0;
+        this.underrunCount = 0;
         this.isReady = true;
         this.port.postMessage({ type: 'READY' });
         break;
@@ -148,6 +154,8 @@ class DeepFilterAudioProcessor extends AudioWorkletProcessor {
     // Read processed output
     const outputAvailable = this.getOutputAvailable();
     if (outputAvailable >= 128) {
+      // Normal path — enough data in output buffer
+      this.underrunCount = 0;
       for (let inputNum = 0; inputNum < sourceLimit; inputNum++) {
         const output = outputList[inputNum];
         for (let ch = 0; ch < output.length; ch++) {
@@ -159,7 +167,37 @@ class DeepFilterAudioProcessor extends AudioWorkletProcessor {
           }
         }
       }
+      // Save last good output for underrun protection
+      if (this.lastGoodFrame) {
+        let readPos = this.outputReadPos;
+        for (let i = 0; i < 128; i++) {
+          this.lastGoodFrame[i] = this.outputBuffer[readPos];
+          readPos = (readPos + 1) % this.bufferSize;
+        }
+      }
       this.outputReadPos = (this.outputReadPos + 128) % this.bufferSize;
+    } else {
+      // Underrun — Worker hasn't returned frame yet
+      // Fade out last good frame to avoid hard cut (dalgalanma)
+      this.underrunCount++;
+      for (let inputNum = 0; inputNum < sourceLimit; inputNum++) {
+        const output = outputList[inputNum];
+        for (let ch = 0; ch < output.length; ch++) {
+          const outputChannel = output[ch];
+          if (this.lastGoodFrame && this.underrunCount <= 3) {
+            // Gentle fade-out over consecutive underruns
+            const gain = Math.max(0, 1 - this.underrunCount * 0.35);
+            for (let i = 0; i < 128; i++) {
+              // Per-sample fade within the block
+              const sampleFade = gain * (1 - i / 128 * 0.3);
+              outputChannel[i] = this.lastGoodFrame[i] * sampleFade;
+            }
+          } else {
+            // Too many consecutive underruns — output silence
+            outputChannel.fill(0);
+          }
+        }
+      }
     }
 
     return true;
