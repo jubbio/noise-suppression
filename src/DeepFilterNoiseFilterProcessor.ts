@@ -23,7 +23,8 @@ export class DeepFilterNoiseFilterProcessor implements TrackProcessor<Track.Kind
   constructor(options: DeepFilterNoiseFilterOptions = {}) {
     const cfg = {
       sampleRate: options.sampleRate ?? 48000,
-      noiseReductionLevel: options.noiseReductionLevel ?? 80,
+      noiseReductionLevel: options.noiseReductionLevel ?? 25,
+      postFilterBeta: options.postFilterBeta ?? 0.02,
       assetConfig: options.assetConfig
     };
 
@@ -122,6 +123,10 @@ export class DeepFilterNoiseFilterProcessor implements TrackProcessor<Track.Kind
 
   setAdaptiveEnabled(enabled: boolean): void {
     this.processor.setAdaptiveEnabled(enabled);
+  }
+
+  setPostFilterBeta(beta: number): void {
+    this.processor.setPostFilterBeta(beta);
   }
 
   suspend = async (): Promise<void> => {

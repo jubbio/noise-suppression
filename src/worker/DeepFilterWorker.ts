@@ -24,9 +24,9 @@ let workletPort: MessagePort | null = null;
 
 // Adaptive suppression state
 let adaptiveEnabled = false;
-let baseSuppression = 50;
-let minSuppression = 10;
-let currentSuppression = 50;
+let baseSuppression = 25;
+let minSuppression = 8;
+let currentSuppression = 25;
 let rmsSmoothed = 0;
 let noiseFloor = 0.001;
 const noiseFloorAlpha = 0.001;
@@ -93,6 +93,13 @@ self.onmessage = (event: MessageEvent) => {
         const handle = wasm_bindgen.df_create(bytes, suppressionLevel ?? 50);
         const frameLength = wasm_bindgen.df_get_frame_length(handle);
 
+        // Post filter beta — artifact'leri (robotlaşma, metalik ses) yumuşatır
+        // 0 = kapalı, 0.02-0.03 arası iyi denge sağlar
+        const postFilterBeta = event.data.postFilterBeta ?? 0.02;
+        if (postFilterBeta > 0) {
+          wasm_bindgen.df_set_post_filter_beta(handle, postFilterBeta);
+        }
+
         model = { handle, frameLength };
         baseSuppression = suppressionLevel ?? 50;
         currentSuppression = baseSuppression;
@@ -135,6 +142,14 @@ self.onmessage = (event: MessageEvent) => {
       if (!adaptiveEnabled && model) {
         currentSuppression = baseSuppression;
         wasm_bindgen.df_set_atten_lim(model.handle, baseSuppression);
+      }
+      break;
+    }
+
+    case 'SET_POST_FILTER_BETA': {
+      const beta = Math.max(0, Math.min(0.05, Number(event.data.value) || 0));
+      if (model) {
+        wasm_bindgen.df_set_post_filter_beta(model.handle, beta);
       }
       break;
     }

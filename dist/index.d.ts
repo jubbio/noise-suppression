@@ -12,6 +12,7 @@ interface AssetUrls {
 interface DeepFilterNet3ProcessorConfig {
     sampleRate?: number;
     noiseReductionLevel?: number;
+    postFilterBeta?: number;
     assetConfig?: AssetConfig;
 }
 interface DeepFilterNoiseFilterOptions {
@@ -19,6 +20,7 @@ interface DeepFilterNoiseFilterOptions {
     frameSize?: number;
     enableNoiseReduction?: boolean;
     noiseReductionLevel?: number;
+    postFilterBeta?: number;
     assetConfig?: AssetConfig;
     enabled?: boolean;
     /** Supply an existing AudioContext to avoid creating a new one (prevents audio disruption on Windows) */
@@ -59,6 +61,7 @@ declare class DeepFilterNet3Core {
     setSuppressionLevel(level: number): void;
     setNoiseSuppressionEnabled(enabled: boolean): void;
     setAdaptiveEnabled(enabled: boolean): void;
+    setPostFilterBeta(beta: number): void;
     isNoiseSuppressionEnabled(): boolean;
     isReady(): boolean;
     get hasWorker(): boolean;
@@ -104,6 +107,7 @@ declare class DeepFilterNoiseFilterProcessor implements TrackProcessor<Track.Kin
     isNoiseSuppressionEnabled(): boolean;
     get workerRunning(): boolean;
     setAdaptiveEnabled(enabled: boolean): void;
+    setPostFilterBeta(beta: number): void;
     suspend: () => Promise<void>;
     resume: () => Promise<void>;
     destroy: () => Promise<void>;

@@ -8,6 +8,7 @@ export interface ProcessorAssets {
 export interface DeepFilterNet3ProcessorConfig {
   sampleRate?: number;
   noiseReductionLevel?: number;
+  postFilterBeta?: number;
   assetConfig?: AssetConfig;
 }
 
@@ -16,6 +17,7 @@ export interface DeepFilterNoiseFilterOptions {
   frameSize?: number;
   enableNoiseReduction?: boolean;
   noiseReductionLevel?: number;
+  postFilterBeta?: number;
   assetConfig?: AssetConfig;
   enabled?: boolean;
   /** Supply an existing AudioContext to avoid creating a new one (prevents audio disruption on Windows) */

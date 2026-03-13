@@ -21,7 +21,8 @@ export class DeepFilterNet3Core {
   constructor(config: DeepFilterNet3ProcessorConfig = {}) {
     this.config = {
       sampleRate: config.sampleRate ?? 48000,
-      noiseReductionLevel: config.noiseReductionLevel ?? 50,
+      noiseReductionLevel: config.noiseReductionLevel ?? 25,
+      postFilterBeta: config.postFilterBeta ?? 0.02,
       assetConfig: config.assetConfig
     };
     this.assetLoader = getAssetLoader(config.assetConfig);
@@ -70,6 +71,7 @@ export class DeepFilterNet3Core {
         wasmModule: this.assets!.wasmModule,
         modelBytes: this.assets!.modelBytes,
         suppressionLevel: this.config.noiseReductionLevel,
+        postFilterBeta: this.config.postFilterBeta,
       });
     });
   }
@@ -178,6 +180,13 @@ export class DeepFilterNet3Core {
     // Send to Worker (which runs the adaptive logic)
     if (this.worker) {
       this.worker.postMessage({ type: 'SET_ADAPTIVE', value: enabled });
+    }
+  }
+
+  setPostFilterBeta(beta: number): void {
+    // Send to Worker (which owns the WASM state)
+    if (this.worker) {
+      this.worker.postMessage({ type: 'SET_POST_FILTER_BETA', value: beta });
     }
   }
 
